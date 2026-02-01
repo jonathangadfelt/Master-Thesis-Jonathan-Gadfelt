@@ -1,3 +1,11 @@
+"""
+This code has been prepared for the master thesis: 
+"Extreme events and demand elasticity in energy system models with high renewable penetration and limited foresight" by Jonathan Gadfelt 
+
+Copyright c2026 Jonathan Lybecker Gadfelt < jonathan@gadfelt.dk >
+This work is licensed under a Creative Commons Attribution 4.0 International Licence (CC-BY).
+"""
+
 from functions_other import *
 from Classes import *
 print("Pypsa version:", pypsa.__version__)

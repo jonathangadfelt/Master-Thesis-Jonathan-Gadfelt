@@ -1,5 +1,11 @@
-from functions_other import *
+"""
+This code has been prepared for the master thesis: 
+"Extreme events and demand elasticity in energy system models with high renewable penetration and limited foresight" by Jonathan Gadfelt 
 
+Copyright c2026 Jonathan Lybecker Gadfelt < jonathan@gadfelt.dk >
+This work is licensed under a Creative Commons Attribution 4.0 International Licence (CC-BY).
+"""
+from functions_other import *
 
 # Global fontsize parameters
 LEGEND_FONTSIZE = 8
@@ -1648,6 +1654,77 @@ def plot_stacked_generator_capacities(
             bbox_inches="tight",
         )
     
+    plt.show()
+    return ax
+
+def plot_stacked_generator_capacities_w_demand(
+    results_df: pd.DataFrame,
+    tech_list: List[str],
+    stats: pd.Series,
+    colors: Optional[Dict[str, str]] = None,
+    figsize: Tuple[float, float] = (10, 5),
+    title: Optional[str] = None,
+    save_plots: bool = False,
+):
+    """
+    Stacked bar plot of selected capacities over years with mean/max demand overlay.
+    Values shown in GW.
+    """
+
+    if not isinstance(results_df.columns, pd.MultiIndex) or results_df.columns.nlevels < 2:
+        raise ValueError("results_df must have MultiIndex columns with at least 2 levels: (component, technology)")
+
+    tech_level = results_df.columns.get_level_values(1)
+
+    selected_cols = [col for col in results_df.columns if col[1] in tech_list]
+    missing = [t for t in tech_list if t not in set(tech_level)]
+
+    if missing:
+        raise KeyError(f"Missing technologies in results_df columns level 1: {missing}")
+
+    plot_df = results_df.loc[:, selected_cols].copy()
+
+    plot_df.columns = [c[1] for c in plot_df.columns]
+    plot_df = plot_df.groupby(level=0, axis=1).sum()
+    plot_df = plot_df.loc[:, tech_list]
+
+    plot_df /= 1e3
+
+    color_list = None
+    if colors is not None:
+        color_list = [colors.get(t, None) for t in plot_df.columns]
+
+    ax = plot_df.plot(
+        kind="bar",
+        stacked=True,
+        figsize=figsize,
+        color=color_list,
+        width=0.85,
+        edgecolor="none",
+    )
+
+    ax.set_title(title if title is not None else "Stacked capacities over years", pad=28)
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Capacity [GW]")
+
+    mean_demand = float(stats["mean"]) / 1e3
+    max_demand = float(stats["max"]) / 1e3
+
+    ax.axhline(mean_demand, linestyle="--", linewidth=1.2, alpha=0.9, label="Mean demand")
+    ax.axhline(max_demand, linestyle="-.", linewidth=1.2, alpha=0.9, label="Max demand")
+
+    ax.legend(frameon=False, ncol=6, loc="upper center", bbox_to_anchor=(0.5, 1.1))
+
+    plt.xticks(rotation=45, ha="right")
+    ax.set_xticklabels([f"{y%100:02d}/{(y+1)%100:02d}" for y in results_df.index])
+    plt.tight_layout()
+
+    if save_plots:
+        plt.savefig(
+            Figures_mdl_setup_path / "exp_stacked_generator_capacities.pdf",
+            bbox_inches="tight",
+        )
+
     plt.show()
     return ax
 
@@ -3675,8 +3752,637 @@ def _last_day_of_month(year: int, month: int) -> int:
     return (nxt - pd.Timedelta(days=1)).day
 
 
+def plot_dispatch_elec_h2_w_PWL(
+    network,
+    save_plots=False,
+    start_hour=0,
+    duration_hours=7*24,
+    interval=None,
+    title="Dispatch",
+    figure_size=default_figsize,
+    legend_outside: bool = False,
+):
+    """
+    Plot dispatch for electricity bus including H2 conversion and load.
+    Colors are automatically read from network.carriers.color.
+    """
+
+    def _slice_series(series, start_hour, duration_hours, interval):
+        if interval is not None:
+            s, e = interval
+            return series.loc[s:e]
+        else:
+            return series.iloc[start_hour:start_hour + duration_hours]
+
+    carrier_colors = network.carriers.color
+
+    elec_buses = network.buses.index[
+        network.buses.carrier.astype(str).str.lower().isin(["electricity", "ac"])
+    ]
+    if len(elec_buses) == 0:
+        raise ValueError("No electricity bus found")
+    elec_bus = elec_buses[0]
+
+    fig, ax = plt.subplots(figsize=figure_size)
+
+    # --- Generators ---
+    for gen in network.generators.index[network.generators.bus == elec_bus]:
+        p_nom_opt = network.generators.p_nom_opt[gen]
+        if p_nom_opt <= 10:
+            continue
+        series = network.generators_t.p[gen]
+        series_slice = _slice_series(series, start_hour, duration_hours, interval)
+        color = carrier_colors[network.generators.loc[gen, "carrier"]]
+        ax.plot(series_slice.index, series_slice.values, label=gen, color=color)
+
+    # --- Fuel cell injections ---
+    fc_mask = (network.links.carrier.str.lower() == "fuel cell") & (network.links.bus1 == elec_bus)
+    for link in network.links.index[fc_mask]:
+        s = network.links_t.p1[link]
+        s_slice = _slice_series(s, start_hour, duration_hours, interval)
+        color = carrier_colors[network.links.loc[link, "carrier"]]
+        ax.plot(s_slice.index, -s_slice.values,
+                label=f"{link} (discharge)", color=color, linestyle="--")
+
+    # --- Electrolysis draw ---
+    ely_mask = (network.links.carrier.str.lower() == "electrolysis") & (network.links.bus0 == elec_bus)
+    for link in network.links.index[ely_mask]:
+        s = network.links_t.p0[link]
+        s_slice = _slice_series(s, start_hour, duration_hours, interval)
+        color = carrier_colors[network.links.loc[link, "carrier"]]
+        ax.plot(s_slice.index, -s_slice.values,
+                label=f"{link} (charge)", color=color, linestyle=":")
+
+    # --- Load ---
+    load_series = network.loads_t.p_set["load"]
+    load_slice = _slice_series(load_series, start_hour, duration_hours, interval)
+    color = carrier_colors["load shedding"]
+    ax.plot(load_slice.index, load_slice.values, label="load", color=color, linestyle="-.")
+
+    ax.set_title(title, y=1.07)
+    ax.set_ylabel("Power [MWh per snapshot]")
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(axis="x", rotation=45)
+
+    if legend_outside:
+        ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(1.02, 0.97),
+            frameon=True,
+        )
+        fig.subplots_adjust(right=0.8)
+    else:
+        ax.legend()
+
+    if save_plots:
+        s, e = interval if interval else (start_hour, start_hour + duration_hours)
+        fname = f"./Plots/dispatch_{s}_to_{e}.png"
+        fig.savefig(fname, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
+def plot_soc_and_events_single_year(
+    year: int,
+    networks: Dict[str, Any],
+    event_dicts: List[Dict[int, Any]],
+    event_labels: List[str],
+    event_colors: List[str],
+    carrier: str = "hydrogen storage",
+    normalized: bool = True,
+    start_month: int = 6,
+    interval: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None,
+    figure_size: Tuple[float, float] = (12, 6.5),
+    soc_alpha: float = 0.95,
+    soc_linewidth: float = 1.6,
+    soc_colors: Optional[Dict[str, str]] = None,
+    event_alpha: float = 0.85,
+    event_linewidth: float = 6.0,
+    title: Optional[str] = None,
+    soc_ylabel: Optional[str] = None,
+    event_ylabel: str = "Events",
+):
+    """
+    Single-year plot:
+      - Top: SOC overlay for multiple model networks
+      - Bottom: Event bars for multiple event types
+    """
+
+    dummy_year = 2000
+
+    def fmt_yy(y: int) -> str:
+        return f"{str(y)[-2:]}/{str(y + 1)[-2:]}"
+
+    def to_operational_dummy_index(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        return pd.DatetimeIndex(
+            [
+                pd.Timestamp(
+                    dummy_year + (ts.month < start_month),
+                    ts.month,
+                    ts.day,
+                    ts.hour,
+                    ts.minute,
+                )
+                for ts in idx
+            ]
+        )
+
+    def extract_soc_and_cap(net):
+        mask = net.stores.carrier.astype(str).str.lower() == carrier.lower()
+        if not mask.any():
+            raise ValueError(f"No stores found with carrier='{carrier}'")
+
+        ids = net.stores.index[mask]
+        soc = net.stores_t.e[ids].sum(axis=1)
+
+        if "e_nom_opt" in net.stores.columns and net.stores["e_nom_opt"].notna().any():
+            cap = float(net.stores.loc[ids, "e_nom_opt"].fillna(0).sum())
+        else:
+            cap = float(net.stores.loc[ids, "e_nom"].fillna(0).sum())
+
+        return soc, cap
+
+    def prep_soc_for_year(net):
+        soc, cap = extract_soc_and_cap(net)
+
+        if interval is not None:
+            s, e = interval
+            soc = soc.loc[s:e]
+
+        soc = soc.sort_index()
+        soc = soc.loc[str(year):str(year + 1)]
+
+        if normalized:
+            if cap <= 0:
+                raise ValueError("Storage capacity is <= 0")
+            soc = soc / cap
+
+        soc.index = to_operational_dummy_index(soc.index)
+        return soc
+
+    def get_event_list_for_year(ed, y):
+        ev_list = ed.get(y, [])
+        if ev_list is None or isinstance(ev_list, int):
+            return []
+        return ev_list
+
+    x_start = pd.Timestamp(dummy_year, start_month, 1)
+    x_end = pd.Timestamp(dummy_year + 1, start_month, 1) - pd.Timedelta(hours=1)
+
+    month_order = [(start_month + i - 1) % 12 + 1 for i in range(12)]
+    xticks = []
+    xticklabels = []
+    for m in month_order:
+        y_ = dummy_year if m >= start_month else dummy_year + 1
+        xticks.append(pd.Timestamp(y_, m, 1))
+        xticklabels.append(pd.Timestamp(dummy_year, m, 1).strftime("%b"))
+
+    fig = plt.figure(figsize=figure_size)
+    gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 1.0], hspace=0.08)
+    ax_soc = fig.add_subplot(gs[0])
+    ax_evt = fig.add_subplot(gs[1], sharex=ax_soc)
+
+    # ---- SOC plot
+    for name, net in networks.items():
+        soc = prep_soc_for_year(net)
+
+        color = None
+        if soc_colors is not None and name in soc_colors:
+            color = soc_colors[name]
+
+        ax_soc.plot(
+            soc.index,
+            soc.values,
+            label=name,
+            color=color,
+            linewidth=soc_linewidth,
+            alpha=soc_alpha,
+        )
+
+    ax_soc.set_xlim(x_start, x_end)
+    ax_soc.set_ylabel(soc_ylabel or ("SOC [p.u.]" if normalized else "SOC [MWh]"))
+    if normalized:
+        ax_soc.set_ylim(0, 1.05)
+
+    ax_soc.grid(True, axis="y", alpha=0.3)
+    ax_soc.grid(False, axis="x")
+
+    ax_soc.legend(
+        loc="lower right",
+        frameon=True,
+        fontsize=9,
+        borderaxespad=0.8,
+    )
+
+    # ---- Event bars
+    y_pos = np.arange(len(event_dicts))[::-1]
+    ax_evt.set_yticks(y_pos)
+    ax_evt.set_yticklabels(event_labels)
+
+    for i, (ed, col) in enumerate(zip(event_dicts, event_colors)):
+        for ev in get_event_list_for_year(ed, year):
+            s = ev.period.left
+            e = ev.period.right
+
+            if interval is not None:
+                s_int, e_int = interval
+                if e < s_int or s > e_int:
+                    continue
+                s = max(s, s_int)
+                e = min(e, e_int)
+
+            s_m = pd.Timestamp(dummy_year + (s.month < start_month), s.month, s.day, s.hour, s.minute)
+            e_m = pd.Timestamp(dummy_year + (e.month < start_month), e.month, e.day, e.hour, e.minute)
+
+            ax_evt.plot(
+                [s_m, e_m],
+                [y_pos[i], y_pos[i]],
+                color=col,
+                linewidth=event_linewidth,
+                alpha=event_alpha,
+                solid_capstyle="butt",
+            )
+
+    ax_evt.set_xlim(x_start, x_end)
+    ax_evt.set_xlabel("Months")
+    #ax_evt.set_ylabel(event_ylabel)
+    ax_evt.set_xticks(xticks)
+    ax_evt.set_xticklabels(xticklabels)
+
+    ax_evt.grid(True, axis="y", alpha=0.15)
+    ax_evt.grid(False, axis="x")
+
+    plt.setp(ax_soc.get_xticklabels(), visible=False)
+
+    yy = fmt_yy(year)
+    ax_soc.set_title(title or f"SOC and extreme events — {yy}", fontsize=FIGURE_TITLE_FONTSIZE)
+
+    return fig, (ax_soc, ax_evt)
+
+
+def build_aggregate_pwl_with_ls(
+    D_base,
+    shares,
+    p_ref_init,
+    eps,
+    p_ls=10000.0,
+    p_terminal=98.0,
+    price_step=1.0,
+    max_iter=20,
+    tol=1e-4,
+    n_plot=300,
+    ylim=(0, 12000),
+    save_plot=False,
+    file_name="pwl_demand_curve_with_ls"
+):
+    """
+    Build aggregate PWL demand curve (3 segments) with an LS cap segment (seg0).
+    Returns:
+      segments: list of dicts for seg0..seg3 (includes a_d, b_d, a_gen, b_gen, interval bounds)
+      p_ref: updated reference prices after continuity adjustment
+      shares_pct: demand quantity per segment in % of D_base (seg1..seg3)
+    """
+
+    shares = np.array(shares, dtype=float)
+    eps = np.array(eps, dtype=float)
+    p_ref = np.array(p_ref_init, dtype=float).copy()
+
+    # ---- Step 1: aggregate reference quantities ----
+    p_nom = shares * D_base
+    d_agg = np.cumsum(p_nom)  # [D1, D2, D3]
+
+    p_ref[2] = p_terminal
+
+    a_d = np.zeros(3)
+    b_d = np.zeros(3)
+    for i in range(3):
+        a_d[i], b_d[i] = demand_params_from_aggregate_ref(d_ref=d_agg[i], p_ref=p_ref[i], eps=eps[i])
+
+    print("Step 1: initial a_d, b_d")
+    for i in range(3):
+        print(f"seg{i+1}: d_ref={d_agg[i]:.2f}, p_ref={p_ref[i]:.2f}, eps={eps[i]:.4f}  ->  a={a_d[i]:.2f}, b={b_d[i]:.6f}")
+
+    # ---- Step 2: enforce continuity (no overlapping prices) ----
+    for _ in range(max_iter):
+        p1_new = (a_d[1] - b_d[1] * d_agg[0]) + price_step
+        p2_new = (a_d[2] - b_d[2] * d_agg[1]) + price_step
+
+        p_ref_new = p_ref.copy()
+        p_ref_new[0] = p1_new
+        p_ref_new[1] = p2_new
+        p_ref_new[2] = p_terminal
+
+        a_new = np.zeros(3)
+        b_new = np.zeros(3)
+        for i in range(3):
+            a_new[i], b_new[i] = demand_params_from_aggregate_ref(d_ref=d_agg[i], p_ref=p_ref_new[i], eps=eps[i])
+
+        if np.max(np.abs(p_ref_new - p_ref)) < tol:
+            p_ref = p_ref_new
+            a_d, b_d = a_new, b_new
+            break
+
+        p_ref = p_ref_new
+        a_d, b_d = a_new, b_new
+
+    print("\nStep 2: continuity-enforced p_ref and updated a_d, b_d")
+    for i in range(3):
+        print(f"seg{i+1}: D_end={d_agg[i]:.2f}, p_ref={p_ref[i]:.2f}, eps={eps[i]:.4f}  ->  a={a_d[i]:.2f}, b={b_d[i]:.6f}")
+
+    print("\nSegment price ranges:")
+    p_seg1_start = a_d[0] - b_d[0] * 0.0
+    p_seg1_end   = a_d[0] - b_d[0] * d_agg[0]
+    print(f"seg1: D ∈ [0, {d_agg[0]:.2f}] MW, price ∈ [{p_seg1_start:.1f}, {p_seg1_end:.1f}]")
+
+    p_seg2_start = a_d[1] - b_d[1] * d_agg[0]
+    p_seg2_end   = a_d[1] - b_d[1] * d_agg[1]
+    print(f"seg2: D ∈ [{d_agg[0]:.2f}, {d_agg[1]:.2f}] MW, price ∈ [{p_seg2_start:.1f}, {p_seg2_end:.1f}]")
+    p_seg3_start = a_d[2] - b_d[2] * d_agg[1]
+    p_seg3_end   = a_d[2] - b_d[2] * d_agg[2]
+    print(f"seg3: D ∈ [{d_agg[1]:.2f}, {d_agg[2]:.2f}] MW, price ∈ [{p_seg3_start:.1f}, {p_seg3_end:.1f}]")
+
+    # ---- Step 3: LS intersection ----
+    D_ls = demand_at_price(a_d[0], b_d[0], p_ls)
+
+    if D_ls < 0:
+        raise ValueError("LS cap is above seg1 intercept, no intersection (D_ls < 0).")
+    if D_ls > d_agg[0]:
+        raise ValueError("LS cap intersects after seg1 end; check p_ls or seg1 parameters.")
+
+    print(f"\nStep 3: LS intersection for seg0 at p={p_ls}: D_ls = {D_ls:.2f} MW")
+
+    # ---- Step 4: build segments + print + plot ----
+    segments = []
+
+    segments.append({
+        "i": -1,
+        "name": "Load shedding",
+        "D_left": 0.0,
+        "D_right": float(D_ls),
+        "a_d": float(p_ls),
+        "b_d": 0.0,
+        "a_gen": float(p_ls),
+        "b_gen": 0.0,
+        "p_ref": round(float(p_ls), 2),
+        "eps": None,
+        "D_ref": float(D_ls),
+        "width": float(D_ls)
+    })
+
+    D_lefts = np.array([D_ls, d_agg[0], d_agg[1]])
+    D_rights = np.array([d_agg[0], d_agg[1], d_agg[2]])
+
+    for i in range(3):
+        width = float(D_rights[i] - D_lefts[i])
+
+        a_gen_i, b_gen_i = ls_generator_params(a_d[i], b_d[i], D_base=d_agg[i])
+
+        segments.append({
+            "i": i,
+            "name": f"Segment_{i+1}",
+            "D_left": float(D_lefts[i]),
+            "D_right": float(D_rights[i]),
+            "a_d": float(a_d[i]),
+            "b_d": float(b_d[i]),
+            "a_gen": float(a_gen_i),
+            "b_gen": float(b_gen_i),
+            "p_ref": round(float(p_ref[i]), 2),
+            "eps": float(eps[i]),
+            "D_ref": float(d_agg[i]),
+            "width": width
+        })
+
+    print("\nStep 4: final segment parameters (demand and LS generator)")
+    for s in segments:
+        print(f"\n{s['name']}")
+        print(f"  interval D: [{s['D_left']:.2f}, {s['D_right']:.2f}]  width={s['width']:.2f}")
+        print(f"  a_d={s['a_d']:.2f}, b_d={s['b_d']:.6f}")
+        print(f"  a_gen={s['a_gen']:.2f}, b_gen={s['b_gen']:.6f}")
+
+    #colors = ['red', 'blue', 'cyan', 'limegreen']
+    colors = [
+        "#D62728",  # Load shedding (red)
+        "#1F77B4",  # segment_1 (muted blue)
+        "#17BECF",  # segment_2 (teal)
+        "#2CA02C",  # segment_3 (green)
+    ]
+
+    
+    plt.figure(figsize=(7, 4.5))
+
+    for idx, s in enumerate(segments):
+        D_vals = np.linspace(s["D_left"], s["D_right"], n_plot)
+        if s["b_d"] == 0.0:
+            P_vals = np.full_like(D_vals, s["a_d"])
+        else:
+            P_vals = s["a_d"] - s["b_d"] * D_vals
+        plt.plot(D_vals, P_vals, lw=3, label=s["name"], color=colors[idx % len(colors)])
+
+    plt.axvline(D_base, color="gray", linestyle="--", label="mean demand")
+    plt.xlabel("Aggregate demand (MW)")
+    plt.ylabel("Price (€/MWh)")
+    plt.title("Aggregate PWL demand curve")
+    plt.ylim(*ylim)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_plots and save_plot:
+        plt.savefig(
+            Figures_mdl_setup_path / f"{file_name}.pdf",
+            bbox_inches="tight",
+        )
+
+    plt.show()
+
+    # ---- Updated shares (fractions, not percent) to match the plotted widths ----
+    seg0 = round(D_ls / D_base,2)
+    seg1 = round((d_agg[0] - D_ls) / D_base,3)
+    seg2 = round((d_agg[1] - d_agg[0]) / D_base,2)
+    seg3 = round((d_agg[2] - d_agg[1]) / D_base,2)
+
+    shares_pct = [seg0, seg1, seg2, seg3]
+
+    print("\nShares (width on x-axis, % of D_base):")
+    print(f"seg0 (LS cap): {shares_pct[0]:.2f}%")
+    print(f"seg1:          {shares_pct[1]:.2f}%")
+    print(f"seg2:          {shares_pct[2]:.2f}%")
+    print(f"seg3:          {shares_pct[3]:.2f}%")
+
+    return segments, p_ref, shares_pct
+
+def demand_params_from_aggregate_ref(d_ref, p_ref, eps):
+    """
+    Compute a_d and b_d for linear inverse demand:
+        p(D) = a_d - b_d * D
+    calibrated at (d_ref, p_ref) with point elasticity eps.
+    """
+    b_d = -p_ref / (eps * d_ref)
+    a_d = p_ref + b_d * d_ref
+    return a_d, b_d
+
+def demand_at_price(a_d, b_d, price):
+    """
+    Invert p(D) = a_d - b_d D to find D at given price.
+    """
+    return (a_d - price) / b_d
+def ls_generator_params(a_d, b_d, D_base):
+    """
+    Convert demand curve parameters to LS generator cost parameters.
+    """
+    a_gen = a_d - b_d * D_base
+    b_gen = 0.5 * b_d
+    return a_gen, b_gen
 
 
 
+def plot_avg_yearly_events_vs_threshold(
+    df: pd.DataFrame,
+    title: str = None,
+    file_name: str = None,
+    labels: List[str] = None,
+    figure_size=default_figsize,
+):
+    """
+    Plot average yearly number of SP events vs threshold beta.
+    """
+    dfp = df.copy().sort_values("Threshold beta")
 
+    x = dfp["Threshold beta"].to_numpy()
+
+    fig, ax = plt.subplots(figsize=figure_size, constrained_layout=True)
+
+    markers = ["o", "s", "^", "D", "v", "*", "x", "P"]
+
+    for i, col in enumerate(labels):
+        m = markers[i % len(markers)]
+        ax.plot(
+            x,
+            dfp[col].to_numpy(),
+            marker=m,
+            linewidth=1.8,
+            markersize=5,
+            label=col,
+        )
+
+    ax.set_xlabel("Threshold beta")
+    ax.set_ylabel("Events per year")
+
+    dx = 0.02
+    ax.set_xlim(float(np.min(x) - dx), float(np.max(x) + dx))
+
+    ax.set_ylim(bottom=0.0)
+    ax.grid(True, which="major", linewidth=0.6, alpha=0.35, axis="y")
+    ax.grid(False, axis="x")
+
+    if title is not None:
+        ax.set_title(title)
+
+    ax.legend(frameon=True)
+
+    if file_name is not None:
+        plt.savefig(Figures_results_path / file_name, bbox_inches="tight")
+
+    return fig, ax
+
+def plot_avg_event_duration_vs_threshold(
+    df: pd.DataFrame,
+    title: str = None,
+    file_name: str = None,
+    labels: List[str] = None,
+    figure_size=default_figsize,
+):
+    """
+    Plot average event duration (days) vs threshold beta.
+    """
+    dfp = df.copy().sort_values("Threshold beta")
+
+    x = dfp["Threshold beta"].to_numpy()
+
+    fig, ax = plt.subplots(figsize=figure_size, constrained_layout=True)
+
+    markers = ["o", "s", "^", "D", "v", "*", "x", "P"]
+
+    for i, col in enumerate(labels):
+        m = markers[i % len(markers)]
+        ax.plot(
+            x,
+            dfp[col].to_numpy(),
+            marker=m,
+            linewidth=1.8,
+            markersize=5,
+            label=col,
+        )
+
+    ax.set_xlabel("Threshold beta")
+    ax.set_ylabel("Average event duration [days]")
+
+    dx = 0.02
+    ax.set_xlim(float(np.min(x) - dx), float(np.max(x) + dx))
+
+    ax.set_ylim(bottom=0.0)
+    ax.grid(True, which="major", linewidth=0.6, alpha=0.35, axis="y")
+    ax.grid(False, axis="x")
+
+    if title is not None:
+        ax.set_title(title)
+
+    ax.legend(frameon=True)
+
+    if file_name is not None:
+        plt.savefig(Figures_results_path / file_name, bbox_inches="tight")
+
+    return fig, ax
+
+def rows_at_threshold_beta(
+    tables_by_cap: Dict[str, pd.DataFrame],
+    beta_star: float,
+    model_cols: List[str],
+) -> pd.DataFrame:
+    rows = []
+    for cap, df in tables_by_cap.items():
+        r = df.loc[df["Threshold beta"] == round(beta_star, 2), ["Threshold beta"] + model_cols].iloc[0]
+        out = {"Capacity": cap}
+        for c in model_cols:
+            out[c] = float(r[c])
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def plot_capacity_sensitivity_bars(
+    df_bars: pd.DataFrame,
+    model_cols: List[str],
+    ylabel: str,
+    title: str,
+    figsize: Tuple[float, float] = (8.0, 4.2),
+    file_name: str | None = None,
+):
+    caps = df_bars["Capacity"].to_list()
+    x = np.arange(len(caps), dtype=float)
+
+    n = len(model_cols)
+    width = 0.80 / n
+    offsets = (np.arange(n) - (n - 1) / 2) * width
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, m in enumerate(model_cols):
+        ax.bar(x + offsets[i], df_bars[m].to_numpy(), width=width, label=m)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(caps)
+    ax.set_xlabel("Capacity assumption", labelpad=10)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    ax.set_ylim(bottom=0.0)
+    ax.set_axisbelow(True)
+    ax.grid(True, axis="y", linewidth=0.6, alpha=0.4)
+
+    ax.legend(frameon=True, loc="upper left", bbox_to_anchor=(1.0, 1.02), ncol=1, title="Model")
+    fig.tight_layout()
+
+    if file_name is not None:
+        plt.savefig(Figures_results_path / file_name, bbox_inches="tight")
+
+    return fig, ax
 

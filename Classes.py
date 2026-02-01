@@ -1,3 +1,11 @@
+"""
+This code has been prepared for the master thesis: 
+"Extreme events and demand elasticity in energy system models with high renewable penetration and limited foresight" by Jonathan Gadfelt 
+
+Copyright c2026 Jonathan Lybecker Gadfelt < jonathan@gadfelt.dk >
+This work is licensed under a Creative Commons Attribution 4.0 International Licence (CC-BY).
+"""
+
 from functions_other import *
 np.random.seed(1) 
 
@@ -308,7 +316,6 @@ class Build_network_capacity_exp:
 
         return extracted
 
-# Skal have carriers opdatering for buses, h2 store og load og bat store
 class Build_network_capacity_exp_calendar_year:
     def __init__(
         self,
