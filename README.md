@@ -1,21 +1,37 @@
 # Master-Thesis-Jonathan-Gadfelt
-This repository contains the code to reproduce the results presented in the master thesis and "Extreme events and demand elasticity in energy system models with high renewable penetration and limited foresight" created by me (Jonathan Lybecker Gadfelt) 
 
-The master thesis is submitted to the Department of Wind and Energy Systems at the Technical University of Denmark (DTU) in February 2026 as part of the MSc in Sustainable Energy Systems.
+This repository contains the code used to reproduce the results presented in the master thesis  
+**“Extreme events and demand elasticity in energy system models with high renewable penetration and limited foresight”**,  
+authored by Jonathan Lybecker Gadfelt.
 
-Copyright c2026 Jonathan Lybecker Gadfelt < jonathan@gadfelt.dk >
-This work is licensed under a Creative Commons Attribution 4.0 International Licence (CC-BY).
+The thesis was submitted to the Department of Wind and Energy Systems at the Technical University of Denmark (DTU) in February 2026 as part of the MSc programme in Sustainable Energy Systems.
 
-The repository already contains all the results presented in the thesis. However, if you want to reproduce the results yourself, please follow the instructions below.
+## License
+Copyright © 2026 Jonathan Lybecker Gadfelt <jonathan@gadfelt.dk>  
+This work is licensed under the Creative Commons Attribution 4.0 International Licence (CC-BY).
 
-Use the python file: "Run_results.py" to run the desired new model simulations. It contains commends internally in the code to guide you through the process of running the models.
+## Repository contents
+The repository already contains all model outputs and results presented in the thesis.  
+If you wish to reproduce the results or run new simulations, follow the instructions below.
 
-The file Results.ipynb contains the code to generate the plots and tables presented in the thesis based on the model outputs and many additional results that did not make it into the thesis final report.
-Usage: Just make sure to define the correct path to the model outputs in the first code cell. This is done by changing the names of the new test results you have generated in "Run_results.py" - Then all the plots and tables will be generated automatically when running through the notebook.
+### Running model simulations
+Use the Python script **`Run_results.py`** to run new model simulations.  
+The file contains inline comments explaining how to configure and execute the different modelling setups.
 
-All functions to generate the plots and tables are contained in the file: "functions_plots.py".
-Additional helper functions to run the model simulations are contained in the file: "functions_other.py".
+### Generating plots and tables
+The Jupyter notebook **`Results.ipynb`** generates all figures and tables presented in the thesis, as well as additional analyses not included in the final report.
+It is setup to use the results contained in the repository by default, and will automatically generate all plots and tables when executed.
 
-Lastly, the PyPSA models used for the simulations are contained as classes in the file: Classes.py
+To use the notebook for new model outputs:
+1. Set the correct path to the model output directory in the first code cell.
+2. Ensure the result names match those generated in `Run_results.py`.
+3. Just run the notebook to with the new test name to then generate all plots and tables.
 
-The PyPSA version used for the model simulations was PyPSA 1.0.6. All package version are listed in the environment.yml file.
+### Code structure
+- **`functions_plots.py`** contains all plotting and table-generation functions.
+- **`functions_other.py`** contains helper functions used to run the model simulations and process results.
+- **`Classes.py`** defines the PyPSA model classes used in the study to create the capacity expansion model and economic dispatch model.
+
+## Software versions
+Model simulations were performed using **PyPSA 1.0.6**.  
+All package versions are specified in the `environment.yml` file.

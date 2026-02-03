@@ -3604,7 +3604,7 @@ def plot_overlap_matrix_heatmap(
         rotation_mode="anchor"
     )
 
-    cbar = fig.colorbar(im, ax=ax, fraction=0.036, pad=0.037)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.034, pad=0.037)
     cbar.set_label("Probability share", labelpad=15)
     cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
     cbar.ax.set_yticklabels(['0', '0.2', '0.4', '0.6', '0.8', '1.0'])
