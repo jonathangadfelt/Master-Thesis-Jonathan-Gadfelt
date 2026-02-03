@@ -4186,7 +4186,7 @@ def build_aggregate_pwl_with_ls(
     plt.legend()
     plt.tight_layout()
 
-    if save_plots and save_plot:
+    if save_plot:
         plt.savefig(
             Figures_mdl_setup_path / f"{file_name}.pdf",
             bbox_inches="tight",
