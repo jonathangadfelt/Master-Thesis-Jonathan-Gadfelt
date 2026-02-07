@@ -34,6 +34,14 @@ FIGURES_DIR.mkdir(exist_ok=True)
 
 region = "ESP"          # Region for hydro inflow data
 
+# Default weather, hydro and demand years used when a single year is selected
+w_year_exp = 2009
+h_year_exp = 2007
+d_year_exp = 2018
+
+w_year_dispatch = 2009
+h_year_dispatch = 2007
+d_year_dispatch = 2018
 
 ##############################################################
 "  ____________________ LOAD ALL DATA ____________________ "
@@ -291,7 +299,7 @@ def capacities_exp_per_year(networks, flatten_columns=False):
     for year in weather_years:
         net = networks[year]
 
-        # Store capacities (adjust columns as needed)
+        # Store capacities
         gen = net.generators["p_nom_opt"].rename("p_nom_opt")
         links = net.links["p_nom_opt"].rename("p_nom_opt")
         stores = net.stores["e_nom_opt"].rename("e_nom_opt")
@@ -310,23 +318,48 @@ def capacities_exp_per_year(networks, flatten_columns=False):
     return results_df
 
 
-#create Stats opt_df for exp model
+# Create Stats opt_df for exp model
 def stats_exp_nets(df, save_path=None, as_columns=True):
     """
-    Quick stats for results_df.
-    - Columns will be flattened names like "OCGT" (just tech name).
-    - If as_columns=True (default) -> rows = stats, columns = components.
-    - If as_columns=False -> rows = components, columns = stats (old behavior).
+    Compute descriptive statistics for a results DataFrame.
+
+    Statistics include mean, standard deviation, selected percentiles,
+    and minimum and maximum values for each component.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input results table with components as columns.
+    save_path : str or None
+        Optional file path for saving the output as a CSV file.
+    as_columns : bool
+        If True, statistics are returned as rows and components as columns.
+        If False, components are returned as rows and statistics as columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table of descriptive statistics.
     """
-    s = round(df.describe(percentiles=[.25, .45, .5, .55, .60, .65, .70, .75]).loc[
-        ['mean', 'std', 'min', '25%', '45%', '50%',  '55%', '60%', '65%', '70%', '75%', 'max']], 
-        1)
-    # flatten multiindex columns to just tech name (last element of tuple)
+    s = round(
+        df.describe(
+            percentiles=[.25, .45, .5, .55, .60, .65, .70, .75]
+        ).loc[
+            ['mean', 'std', 'min',
+             '25%', '45%', '50%',
+             '55%', '60%', '65%', '70%', '75%', 'max']
+        ],
+        1
+    )
+
+    # Use the component name as column label when a MultiIndex is present
     flat = [col[-1] if isinstance(col, tuple) else str(col) for col in s.columns]
     s.columns = flat
 
+    # Set output orientation
     out = s if as_columns else s.T
 
+    # Optionally save results to disk
     if save_path:
         out.to_csv(save_path)
 
@@ -334,24 +367,50 @@ def stats_exp_nets(df, save_path=None, as_columns=True):
 
 def stats_exp_nets_extended(df, save_path=None, as_columns=True):
     """
-    Quick stats for results_df.
-    - Columns will be flattened names like "OCGT" (just tech name).
-    - If as_columns=True (default) -> rows = stats, columns = components.
-    - If as_columns=False -> rows = components, columns = stats (old behavior).
+    Compute a set of descriptive statistics for a results DataFrame.
+
+    Statistics include mean, standard deviation, selected percentiles,
+    and minimum and maximum values for each component.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input results table with components as columns.
+    save_path : str or None
+        Optional file path for saving the output as a CSV file.
+    as_columns : bool
+        If True, statistics are returned as rows and components as columns.
+        If False, components are returned as rows and statistics as columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table of descriptive statistics.
     """
-    s = round(df.describe(percentiles=[.25, .30, .35, .40, .45, .5, .55, .60, .65, .70, .75]).loc[
-        ['mean', 'std', 'min', '25%', '30%', '35%', '40%', '45%', '50%',  '55%', '60%', '65%', '70%', '75%', 'max']], 
-        1)
-    # flatten multiindex columns to just tech name (last element of tuple)
+    s = round(
+        df.describe(
+            percentiles=[.25, .30, .35, .40, .45, .5, .55, .60, .65, .70, .75]
+        ).loc[
+            ['mean', 'std', 'min',
+             '25%', '30%', '35%', '40%', '45%', '50%',
+             '55%', '60%', '65%', '70%', '75%', 'max']
+        ],
+        1
+    )
+
+    # Use the component name as column label when a MultiIndex is present
     flat = [col[-1] if isinstance(col, tuple) else str(col) for col in s.columns]
     s.columns = flat
 
+    # Set output orientation
     out = s if as_columns else s.T
 
+    # Optionally save results to disk
     if save_path:
         out.to_csv(save_path)
 
     return out
+
 
 ##############################################################
 " ____________________ ROLLING HORIZON ____________________ "
@@ -396,42 +455,6 @@ def rh_pf_test_yearly(test_year, horizon_days=7, overlap_days=0,
     )
 
     return N_pf, N_rh
-
-    d_horizon = 7 # days in horizon
-    o_horizon = 0 # days of overlap in rh
-
-    N_pf_class = Build_dispatch_network(
-        opt_capacities_df=opt_capacities_df.loc["75%"],
-        weather_year=test_year, hydro_year=h_year_dispatch, demand_year=d_year_dispatch,
-        data=All_data, cost_data=Cost, setup=setup_dispatch
-    )
-    N_pf = N_pf_class.network
-
-    silent_optimize(N_pf)
-
-    N_rlh_class = Build_dispatch_network(
-        opt_capacities_df=opt_capacities_df.loc["75%"],
-        weather_year=test_year, hydro_year=h_year_dispatch, demand_year=d_year_dispatch,
-        data=All_data, cost_data=Cost, setup=setup_dispatch
-    )
-    N_rlh = N_rlh_class.network
-
-
-    # Patch rolling horizon function onto the Network
-    N_rlh.optimize_with_rolling_horizon = MethodType(optimize_with_rolling_horizon_collect, N_rlh)
-
-    # Run the rolling-horizon optimization
-    N_rlh.optimize_with_rolling_horizon(
-        snapshots=N_rlh.snapshots,
-        horizon= 24 * d_horizon,
-        overlap= 24 * o_horizon,
-        solver_name="gurobi",
-        solver_options={"OutputFlag": 0},
-        assign_all_duals=True,
-        log_to_console=False
-    )
-
-    return N_pf, N_rlh, N_rlh.generators.attrs["rolling_objectives"]
 
 ##############################################################
 " ____________________ PRINT RESULTS FUNCTION ____________________ "
@@ -667,7 +690,6 @@ def tot_cost_N(N):
 ##############################################################
 " ____________________ SILENT OPTIMIZE ____________________ "
 ##############################################################
-#logger = logging.getLogger(__name__)
 
 def silent_optimize(network, solver_name="gurobi", solver_options=None):
     """
@@ -685,14 +707,13 @@ def silent_optimize(network, solver_name="gurobi", solver_options=None):
     for name in ["pypsa", "linopy", "gurobipy"]:
         logging.getLogger(name).setLevel(logging.CRITICAL)
 
-    # Monkey-patch tqdm to disable progress bars
+    # Suppress tqdm progress output during optimization
     tqdm.tqdm = lambda *args, **kwargs: iter(args[0]) if args else iter([])
 
     # Redirect stdout to suppress Gurobi messages
     with open(os.devnull, 'w') as fnull:
         with redirect_stdout(fnull):
             network.optimize(solver_name=solver_name, assign_all_duals=True, solver_options=solver_options)
-            #print("Objective value:", network.objective)
 
 
 

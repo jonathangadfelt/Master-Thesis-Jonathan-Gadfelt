@@ -241,193 +241,6 @@ def plot_price_duration_curve(N, descending=True, show_percentile_axis=True, tit
     plt.tight_layout()
     plt.show()
 
-def plot_dispatch(network, colors=None, save_plots=False,
-                  start_hour=0, duration_hours=7 * 24, interval=None,
-                  title="Dispatch", figure_size=default_figsize):
-    """
-    Plot dispatch for a network.
-
-    Parameters
-    ----------
-    network : pypsa.Network-like
-    colors : dict or None
-        mapping from component name -> matplotlib color
-    save_plots : bool
-    start_hour : int
-        only used when `interval` is None (iloc-based slicing)
-    duration_hours : int
-        only used when `interval` is None (iloc-based slicing)
-    interval : tuple (start, end) or None
-        If provided, slices all time series with .loc[start:end] using
-        the network time index. start/end can be pd.Timestamp, string, etc.
-    title : str
-    """
-    import matplotlib.pyplot as plt
-
-    # Determine slicing mode
-    use_label_slice = interval is not None
-    if use_label_slice:
-        start, end = interval
-
-    end_hour = start_hour + duration_hours
-
-    plt.figure(figsize=figure_size)
-
-    # Plot generator dispatch
-    for generator in network.generators.index:
-        # only plot sizable optimized capacities (keeps behaviour similar to your original)
-        p_nom_opt = network.generators.p_nom_opt.get(generator, 0)
-        if p_nom_opt <= 10:
-            continue
-
-        series = network.generators_t.p[generator]
-
-        if use_label_slice:
-            series_slice = series.loc[start:end]
-        else:
-            series_slice = series.iloc[start_hour:end_hour]
-
-        # defensive: skip empty slices
-        if series_slice.empty:
-            continue
-
-        plt.plot(series_slice.index, series_slice.values,
-                 label=generator,
-                 color=(colors.get(generator) if colors else None))
-
-    # Plot hydro dispatch (storage_units_t.p_dispatch)
-    storage_units = network.storage_units
-    hydro_mask = (storage_units.carrier == "hydro") & (storage_units.bus == "electricity bus")
-    if hydro_mask.any():
-        for idx in storage_units[hydro_mask].index:
-            # some pypsa versions: storage_units_t.p_dispatch or storage_units_t.p
-            # prefer p_dispatch if available
-            if "p_dispatch" in getattr(network.storage_units_t, "columns", []):
-                series = network.storage_units_t.p_dispatch[idx]
-            else:
-                # fallback if different naming
-                series = network.storage_units_t.p[idx]
-
-            if use_label_slice:
-                series_slice = series.loc[start:end]
-            else:
-                series_slice = series.iloc[start_hour:end_hour]
-
-            if series_slice.empty:
-                continue
-
-            plt.plot(series_slice.index, series_slice.values,
-                     label=f"{idx} (hydro dispatch)",
-                     color=(colors.get("hydro") if colors else "green"),
-                     linestyle="--")
-
-    # Plot load (if present)
-    # loads_t.p_set is usually a DataFrame with columns being load names; we used "load"
-    try:
-        load_series = network.loads_t.p_set["load"]
-    except Exception:
-        # try the case where loads_t.p_set has a different structure
-        # pick the first column if "load" not present
-        if hasattr(network.loads_t.p_set, "columns") and len(network.loads_t.p_set.columns) > 0:
-            load_series = network.loads_t.p_set.iloc[:, 0]
-        else:
-            load_series = None
-
-    if load_series is not None:
-        if use_label_slice:
-            load_slice = load_series.loc[start:end]
-        else:
-            load_slice = load_series.iloc[start_hour:end_hour]
-
-        if not load_slice.empty:
-            plt.plot(load_slice.index, load_slice.values,
-                     label="load", color="black", linestyle=":")
-
-    # Formatting
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.title(f'{title}', y=1.07)
-    plt.ylabel('Generation in MWh')
-    plt.grid(True, which='major', alpha=0.25)
-    plt.legend()
-    if save_plots:
-        # derive a simple filename from interval or start_hour
-        if use_label_slice:
-            s = str(start).replace(":", "-")
-            e = str(end).replace(":", "-")
-            fname = f'./Plots/dispatch_{s}_to_{e}.png'
-        else:
-            fname = f'./Plots/dispatch_{start_hour}_{end_hour}.png'
-        plt.savefig(fname, dpi=300, bbox_inches='tight')
-    plt.show()
-
-def plot_dispatch_bat(network, colors=None, save_plots=False, start_hour=0, duration_hours=7 * 24, title="Dispatch", figure_size=default_figsize):
-
-    generators = network.generators.index
-    storage_units = network.storage_units
-    links = network.links
-
-    end_hour = start_hour + duration_hours
-
-    plt.figure(figsize=figure_size)
-
-    # Plot generator dispatch
-    for generator in generators:
-        
-        if getattr(network.generators, "p_nom_opt", network.generators.p_nom).get(generator, 0) > 10:
-            plt.plot(
-                network.generators_t.p[generator][start_hour:end_hour],
-                label=generator,
-                color=colors.get(generator, None) if colors else None
-            )
-
-    # Plot hydro dispatch
-    hydro_mask = (storage_units.carrier == "hydro") & (storage_units.bus == "electricity bus")
-    if hydro_mask.any():
-        for idx in storage_units[hydro_mask].index:
-            plt.plot(
-                network.storage_units_t.p_dispatch[idx][start_hour:end_hour],
-                label="hydro dispatch",
-                color=colors.get("hydro", "green") if colors else "green",
-                linestyle="--"
-            )
-
-    # Plot battery links (charge/discharge)
-    if {"battery charge", "battery discharge"}.issubset(links.index):
-        plt.plot(
-            network.links_t.p0["battery charge"][start_hour:end_hour],
-            label="battery charge (p0)",
-            color=colors.get("battery charge", "blue") if colors else "blue",
-            linestyle=":"
-        )
-        plt.plot(
-            network.links_t.p1["battery discharge"][start_hour:end_hour],
-            label="battery discharge (p1)",
-            color=colors.get("battery discharge", "red") if colors else "red",
-            linestyle=":"
-        )
-
-    # Plot load
-    if "load" in network.loads.index:
-        plt.plot(
-            network.loads_t.p_set["load"][start_hour:end_hour],
-            label="load",
-            color="black",
-            linestyle=":"
-        )
-
-    # X-axis formatting
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-
-    # Labels and title
-    plt.title(f'Dispatch {title}', y=1.07)
-    plt.ylabel('Generation in MWh')
-    plt.grid(True, which='major', alpha=0.25)
-    plt.legend()
-    if save_plots:
-        plt.savefig(f'./Plots/dispatch_{start_hour}.png', dpi=300, bbox_inches='tight')
-    plt.show()
 
 def plot_dispatch_elec_h2(network, save_plots=False,
                           start_hour=0, duration_hours=7*24, interval=None,
@@ -896,315 +709,6 @@ def plot_price_duration_curves_two_models(
     return fig, ax
 
 
-def plot_h2(network_pf, network_rh, interval=None,
-            normalized=True, show_links=True, show_soc=True, same_axes=False, figure_size=default_figsize):
-    """
-    Compare H2 system behavior between perfect foresight and rolling horizon.
-    SOC is normalized by installed H2 storage capacity (sum of e_nom_opt or e_nom).
-    """
-
-    carrier_colors = (network_pf.carriers.color
-                      if hasattr(network_pf, "carriers") and "color" in network_pf.carriers.columns
-                      else {})
-
-    def extract_h2_series_and_cap(net):
-        # electricity bus
-        elec_buses = net.buses.index[net.buses.carrier.astype(str).str.lower().isin(["electricity","ac"])]
-        if len(elec_buses) == 0:
-            raise ValueError("No electricity bus found")
-        elec_bus = elec_buses[0]
-
-        # links
-        fc_mask  = (net.links.carrier.str.lower() == "fuel cell")    & (net.links.bus1 == elec_bus)
-        ely_mask = (net.links.carrier.str.lower() == "electrolysis") & (net.links.bus0 == elec_bus)
-
-        # fuel cell injects at bus1 so p1 is negative when injecting -> flip sign
-        fc  = (-net.links_t.p1[net.links.index[fc_mask]].sum(axis=1)) if fc_mask.any() else None
-        # electrolyser draws from bus0 -> p0 positive when withdrawing from electricity
-        ely = ( net.links_t.p0[net.links.index[ely_mask]].sum(axis=1)) if ely_mask.any() else None
-
-        # H2 store SOC and capacity
-        store_mask = net.stores.carrier.str.lower().isin(["hydrogen storage","hydrogen","h2 storage"]) \
-                     if hasattr(net, "stores") and len(net.stores) else []
-        soc = None
-        cap = 0.0
-        if hasattr(net, "stores") and len(net.stores) and store_mask.any():
-            ids = net.stores.index[store_mask]
-            soc = net.stores_t.e[ids].sum(axis=1)
-            # normalize by installed capacity: prefer e_nom_opt if available, else e_nom
-            if "e_nom_opt" in net.stores.columns and net.stores["e_nom_opt"].notna().any():
-                cap = float(net.stores.loc[ids, "e_nom_opt"].fillna(0).sum())
-            else:
-                cap = float(net.stores.loc[ids, "e_nom"].fillna(0).sum())
-
-        # fallback if StorageUnit is used
-        if soc is None and hasattr(net, "storage_units") and len(net.storage_units):
-            su_mask = net.storage_units.carrier.str.lower().isin(["hydrogen storage","hydrogen","h2 storage"])
-            if su_mask.any():
-                ids = net.storage_units.index[su_mask]
-                if hasattr(net.storage_units_t, "state_of_charge"):
-                    soc = net.storage_units_t.state_of_charge[ids].sum(axis=1)
-                if "p_nom_opt" in net.storage_units.columns and net.storage_units["p_nom_opt"].notna().any():
-                    cap = float(net.storage_units.loc[ids, "p_nom_opt"].fillna(0).sum())
-                else:
-                    cap = float(net.storage_units.loc[ids, "p_nom"].fillna(0).sum())
-
-        return fc, ely, soc, cap
-
-    fc_pf, ely_pf, soc_pf, cap_pf = extract_h2_series_and_cap(network_pf)
-    fc_rh, ely_rh, soc_rh, cap_rh = extract_h2_series_and_cap(network_rh)
-
-    # interval slicing
-    if interval:
-        s, e = interval
-        fc_pf, ely_pf, soc_pf = [x.loc[s:e] if x is not None else None for x in (fc_pf, ely_pf, soc_pf)]
-        fc_rh, ely_rh, soc_rh = [x.loc[s:e] if x is not None else None for x in (fc_rh, ely_rh, soc_rh)]
-
-    # normalization
-    def nrm_links(s):
-        if s is None or s.empty:
-            return s
-        m = float(np.nanmax(np.abs(s.values)))
-        return s/m if m > 0 else s*0
-
-    if normalized:
-        # links normalized by their own absolute max for visual comparison
-        fc_pf  = nrm_links(fc_pf)
-        ely_pf = nrm_links(ely_pf)
-        fc_rh  = nrm_links(fc_rh)
-        ely_rh = nrm_links(ely_rh)
-        # SOC normalized by installed capacity
-        if soc_pf is not None and cap_pf > 0:
-            soc_pf = soc_pf / cap_pf
-        if soc_rh is not None and cap_rh > 0:
-            soc_rh = soc_rh / cap_rh
-
-    color_fc  = "#ff0000"
-    color_ely = carrier_colors.get("electrolysis", "green")
-    color_soc = carrier_colors.get("hydrogen",   "deepskyblue")
-
-    if same_axes:
-        fig, ax = plt.subplots(figsize=figure_size)
-        if show_links and fc_pf  is not None: ax.plot(fc_pf,  label="Fuel cell PF", color=color_fc)
-        if show_links and fc_rh  is not None: ax.plot(fc_rh,  label="Fuel cell RH", color=color_fc, linestyle="--")
-        if show_links and ely_pf is not None: ax.plot(ely_pf, label="Electrolyser PF", color=color_ely)
-        if show_links and ely_rh is not None: ax.plot(ely_rh, label="Electrolyser RH", color=color_ely, linestyle="--")
-        if show_soc   and soc_pf is not None: ax.plot(soc_pf, label=f"H₂ SOC PF MWh", color=color_soc)
-        if show_soc   and soc_rh is not None: ax.plot(soc_rh, label=f"H₂ SOC RH MWh", color=color_soc, linestyle="--")
-        ax.set_title(f"{'Normalized ' if normalized else ''}Hydrogen system — PF vs RH")
-        ax.set_ylabel("Normalized" if normalized else "Power or Energy")
-        if normalized: ax.set_ylim(0, 1.1)
-        ax.grid(True); ax.legend(loc="best")
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(mdates.AutoDateLocator()))
-        plt.xticks(rotation=30); plt.tight_layout()
-        return fig, ax
-    else:
-        fig, axes = plt.subplots(2, 1, figsize=figure_size, sharex=True)
-        # RH
-        if show_links and fc_rh  is not None: axes[0].plot(fc_rh,  label="Fuel cell RH", color=color_fc)
-        if show_links and ely_rh is not None: axes[0].plot(ely_rh, label="Electrolyser RH", color=color_ely)
-        if show_soc   and soc_rh is not None: axes[0].plot(soc_rh, label=f"H₂ SOC RH MWh", color=color_soc)
-        axes[0].set_title(f"{'Normalized ' if normalized else ''}Rolling horizon")
-        axes[0].grid(True); axes[0].legend(loc="best")
-        # PF
-        if show_links and fc_pf  is not None: axes[1].plot(fc_pf,  label="Fuel cell PF", color=color_fc)
-        if show_links and ely_pf is not None: axes[1].plot(ely_pf, label="Electrolyser PF", color=color_ely)
-        if show_soc   and soc_pf is not None: axes[1].plot(soc_pf, label=f"H₂ SOC PF MWh", color=color_soc)
-        axes[1].set_title(f"{'Normalized ' if normalized else ''}Perfect foresight")
-        axes[1].set_xlabel("Date")
-        if normalized: axes[1].set_ylim(0, 1.1)
-        axes[1].grid(True); axes[1].legend(loc="best")
-        axes[1].xaxis.set_major_locator(mdates.AutoDateLocator())
-        axes[1].xaxis.set_major_formatter(mdates.ConciseDateFormatter(mdates.AutoDateLocator()))
-        plt.xticks(rotation=30); plt.tight_layout()
-        return fig, axes
-
-def plot_h2_new(
-    Year,
-    network_pf,
-    network_rh,
-    interval=None,
-    normalized=True,
-    show_links=True,
-    show_soc=True,
-    same_axes=False,
-    colors: Optional[Dict[str, str]] = None,
-    title_prefix: Optional[str] = None,
-    figure_size: Tuple[float, float] = (12, 8),
-):
-    """
-    Compare H2 system behavior between perfect foresight and rolling horizon.
-    SOC is normalized by installed H2 storage capacity (sum of e_nom_opt or e_nom).
-    Colors default to network carrier colors, but can be overridden by `colors`.
-    """
-
-    carrier_colors = (
-        network_pf.carriers["color"].to_dict()
-        if hasattr(network_pf, "carriers") and "color" in network_pf.carriers.columns
-        else {}
-    )
-
-    def get_color(key: str, fallback: str) -> str:
-        if colors is not None and key in colors:
-            return colors[key]
-        if key in carrier_colors:
-            return carrier_colors[key]
-        return fallback
-
-    def extract_h2_series_and_cap(net):
-        elec_buses = net.buses.index[
-            net.buses.carrier.astype(str).str.lower().isin(["electricity", "ac"])
-        ]
-        if len(elec_buses) == 0:
-            raise ValueError("No electricity bus found")
-        elec_bus = elec_buses[0]
-
-        fc_mask = (net.links.carrier.str.lower() == "fuel cell") & (net.links.bus1 == elec_bus)
-        ely_mask = (net.links.carrier.str.lower() == "electrolysis") & (net.links.bus0 == elec_bus)
-
-        fc = (-net.links_t.p1[net.links.index[fc_mask]].sum(axis=1)) if fc_mask.any() else None
-        ely = (net.links_t.p0[net.links.index[ely_mask]].sum(axis=1)) if ely_mask.any() else None
-
-        soc = None
-        cap = 0.0
-
-        if hasattr(net, "stores") and len(net.stores):
-            store_mask = net.stores.carrier.str.lower().isin(
-                ["hydrogen storage", "hydrogen", "h2 storage"]
-            )
-            if store_mask.any():
-                ids = net.stores.index[store_mask]
-                soc = net.stores_t.e[ids].sum(axis=1)
-                if "e_nom_opt" in net.stores.columns and net.stores["e_nom_opt"].notna().any():
-                    cap = float(net.stores.loc[ids, "e_nom_opt"].fillna(0).sum())
-                else:
-                    cap = float(net.stores.loc[ids, "e_nom"].fillna(0).sum())
-
-        if soc is None and hasattr(net, "storage_units") and len(net.storage_units):
-            su_mask = net.storage_units.carrier.str.lower().isin(
-                ["hydrogen storage", "hydrogen", "h2 storage"]
-            )
-            if su_mask.any():
-                ids = net.storage_units.index[su_mask]
-                if hasattr(net.storage_units_t, "state_of_charge"):
-                    soc = net.storage_units_t.state_of_charge[ids].sum(axis=1)
-                if "p_nom_opt" in net.storage_units.columns and net.storage_units["p_nom_opt"].notna().any():
-                    cap = float(net.storage_units.loc[ids, "p_nom_opt"].fillna(0).sum())
-                else:
-                    cap = float(net.storage_units.loc[ids, "p_nom"].fillna(0).sum())
-
-        return fc, ely, soc, cap
-
-    fc_pf, ely_pf, soc_pf, cap_pf = extract_h2_series_and_cap(network_pf)
-    fc_rh, ely_rh, soc_rh, cap_rh = extract_h2_series_and_cap(network_rh)
-
-    if interval:
-        s, e = interval
-        fc_pf, ely_pf, soc_pf = [x.loc[s:e] if x is not None else None for x in (fc_pf, ely_pf, soc_pf)]
-        fc_rh, ely_rh, soc_rh = [x.loc[s:e] if x is not None else None for x in (fc_rh, ely_rh, soc_rh)]
-
-    def nrm_links(s):
-        if s is None or s.empty:
-            return s
-        m = float(np.nanmax(np.abs(s.values)))
-        return s / m if m > 0 else s * 0
-
-    if normalized:
-        fc_pf = nrm_links(fc_pf)
-        ely_pf = nrm_links(ely_pf)
-        fc_rh = nrm_links(fc_rh)
-        ely_rh = nrm_links(ely_rh)
-
-        if soc_pf is not None and cap_pf > 0:
-            soc_pf = soc_pf / cap_pf
-        if soc_rh is not None and cap_rh > 0:
-            soc_rh = soc_rh / cap_rh
-
-    color_fc = get_color("fuel cell", "#d62728")
-    color_ely = get_color("electrolysis", "#2ca02c")
-    color_soc = get_color("hydrogen", "#1f77b4")
-
-    lw_links = 0.9
-    lw_soc = 1.6
-    alpha_links = 0.55
-    alpha_soc = 0.95
-
-    month_locator = mdates.MonthLocator()
-    month_formatter = mdates.DateFormatter("%b")
-
-    yy = f"{str(Year)[-2:]}/{str(Year + 1)[-2:]}"
-    base = f"{title_prefix} " if title_prefix is not None else ""
-    norm_txt = "(normalized)" if normalized else ""
-
-    if same_axes:
-        fig, ax = plt.subplots(figsize=figure_size, constrained_layout=True)
-
-        if show_links and fc_pf is not None:
-            ax.plot(fc_pf, label="Fuel cell PF", color=color_fc, linewidth=lw_links, alpha=alpha_links)
-        if show_links and fc_rh is not None:
-            ax.plot(fc_rh, label="Fuel cell RH", color=color_fc, linestyle="--", linewidth=lw_links, alpha=alpha_links)
-
-        if show_links and ely_pf is not None:
-            ax.plot(ely_pf, label="Electrolyser PF", color=color_ely, linewidth=lw_links, alpha=alpha_links)
-        if show_links and ely_rh is not None:
-            ax.plot(ely_rh, label="Electrolyser RH", color=color_ely, linestyle="--", linewidth=lw_links, alpha=alpha_links)
-
-        if show_soc and soc_pf is not None:
-            ax.plot(soc_pf, label="H2 SOC PF", color=color_soc, linewidth=lw_soc, alpha=alpha_soc)
-        if show_soc and soc_rh is not None:
-            ax.plot(soc_rh, label="H2 SOC RH", color=color_soc, linestyle="--", linewidth=lw_soc, alpha=alpha_soc)
-
-        ax.set_title(f"{base}Hydrogen system PF vs RH {yy} {norm_txt}".strip())
-        ax.set_ylabel("SOC p.u." if normalized else "Power / Energy [MW / MWh]")
-
-        ax.xaxis.set_major_locator(month_locator)
-        ax.xaxis.set_major_formatter(month_formatter)
-
-        ax.grid(True, axis="y", alpha=0.3)
-        ax.grid(False, axis="x")
-
-        ax.legend(
-            bbox_to_anchor=(1.02, 1),
-            loc="upper left",
-            frameon=False,
-            fontsize=LEGEND_FONTSIZE,
-            handlelength=1.2,
-            columnspacing=0.8,
-            labelspacing=0.3,
-            borderaxespad=0.3,
-        )
-
-        return fig, ax
-
-    fig, axes = plt.subplots(2, 1, figsize=figure_size, sharex=True, constrained_layout=True)
-
-    axes[0].set_title(f"{base}Rolling horizon {yy} {norm_txt}".strip())
-    axes[1].set_title(f"{base}Perfect foresight {yy} {norm_txt}".strip())
-
-    for ax, fc, ely, soc in zip(axes, (fc_rh, fc_pf), (ely_rh, ely_pf), (soc_rh, soc_pf)):
-        if show_links and fc is not None:
-            ax.plot(fc, color=color_fc, linewidth=lw_links, alpha=alpha_links)
-        if show_links and ely is not None:
-            ax.plot(ely, color=color_ely, linewidth=lw_links, alpha=alpha_links)
-        if show_soc and soc is not None:
-            ax.plot(soc, color=color_soc, linewidth=lw_soc, alpha=alpha_soc)
-
-        ax.grid(True, axis="y", alpha=0.3)
-        ax.grid(False, axis="x")
-        if normalized:
-            ax.set_ylim(0, 1.1)
-
-    axes[0].set_ylabel("SOC p.u." if normalized else "Power / Energy [MW / MWh]")
-    axes[1].set_ylabel("SOC p.u." if normalized else "Power / Energy [MW / MWh]")
-    axes[1].set_xlabel("Date")
-
-    axes[1].xaxis.set_major_locator(month_locator)
-    axes[1].xaxis.set_major_formatter(month_formatter)
-
-    return fig, axes
-
-
 def plot_h2_multi(
     Year,
     models: List[Dict[str, Any]],
@@ -1218,45 +722,10 @@ def plot_h2_multi(
     figure_size: Tuple[float, float] = (12, 8),
 ):
     """
-    Compare H2 system behavior across multiple models (up to 5).
+    Plot hydrogen system time series for up to five models.
 
-    Parameters
-    ----------
-    Year : int
-        Used only for title formatting (YY/YY+1).
-    models : list of dict
-        Each dict:
-            {
-              "network": pypsa.Network,
-              "title": str,
-              "ls": str (optional, default "-")  # line style for this model
-            }
-        Example:
-            models = [
-                {"network": networks_pf[Year], "title": "Perfect foresight", "ls": "-"},
-                {"network": networks_rh[Year], "title": "Rolling horizon", "ls": "--"},
-            ]
-    interval : (start, end) tuple or None
-        Optional time slicing.
-    normalized : bool
-        If True, link series normalized by their max abs; SOC normalized by installed storage cap.
-    show_links, show_soc : bool
-        Toggle plotting of fuel cell/electrolyser and SOC.
-    same_axes : bool
-        If True: all models in ONE axis (overlay).
-        If False: one subplot per model (stacked).
-    colors : dict or None
-        Override colors. Keys expected:
-            "fuel cell", "electrolysis", "hydrogen"
-        (same behavior as before)
-    title_prefix : str or None
-        Prepended to titles.
-    figure_size : (w, h)
-        Figure size.
-
-    Returns
-    -------
-    fig, ax_or_axes
+    Shows electrolyser power, fuel cell power, and hydrogen state of charge for a
+    selected year, either overlaid in one axis or stacked as one subplot per model.
     """
 
     if len(models) == 0:
@@ -1264,7 +733,7 @@ def plot_h2_multi(
     if len(models) > 5:
         raise ValueError("models can contain at most 5 entries.")
 
-    # carrier color lookup from first model (fallback)
+    # Use carrier colors from the first model as default styling
     first_net = models[0]["networks"]
     carrier_colors = (
         first_net.carriers["color"].to_dict()
@@ -1325,7 +794,7 @@ def plot_h2_multi(
         m = float(np.nanmax(np.abs(s.values)))
         return s / m if m > 0 else s * 0
 
-    # style
+    # Styling
     color_fc = get_color("fuel cell", "#d62728")
     color_ely = get_color("electrolysis", "#2ca02c")
     color_soc = get_color("hydrogen", "#1f77b4")
@@ -1342,7 +811,7 @@ def plot_h2_multi(
     base = f"{title_prefix} " if title_prefix is not None else ""
     norm_txt = "(normalized)" if normalized else ""
 
-    # helper to prep one model
+    # Prepare series for one model
     def prep_one(net):
         fc, ely, soc, cap = extract_h2_series_and_cap(net)
 
@@ -1358,7 +827,7 @@ def plot_h2_multi(
 
         return fc, ely, soc
 
-    # precompute series
+    # Precompute model series
     series = []
     for m in models:
         net = m["networks"]
@@ -1408,7 +877,7 @@ def plot_h2_multi(
 
         return fig, ax
 
-    # stacked mode: one subplot per model
+    # One subplot per model
     n = len(series)
     fig, axes = plt.subplots(n, 1, figsize=figure_size, sharex=True, constrained_layout=True)
     if n == 1:
@@ -2053,7 +1522,7 @@ def plot_store_operation_groups(
     legend_ncol: int = 3,
 ):
     """
-    groups: list of dicts, each like:
+    groups: list of dicts, each on the form:
         {"networks": {year: net, ...}, "title": "Rolling horizon"}
     """
 
@@ -2585,238 +2054,6 @@ def plot_avg_yearly_events_vs_threshold(
     return fig, ax
 
 
-def plot_overview_heatmap_old(
-    selected_networks: dict,
-    plot_type: str,
-    event_dicts: list,
-    event_labels: list,
-    event_colors: list,
-    standard_year: int = 2018,
-    start_month: int = 6,
-    agg: str = "daily",                 # "hourly" or "daily"
-    cmap: str = "Purples",
-    vmin: float = 0.01,                 # for "0 -> white" via set_under
-    vmax: float | None = None,
-    title: str | None = None,
-    show_heatmap: bool = True,
-    heatmap_alpha: float = 0.7,
-    event_linewidth: float = 3.0,
-    event_alpha: float = 0.9,
-    offset_step: float = 0.2,
-    rowline_color: str = "0.75",
-    rowline_width: float = 0.6,
-    figure_size=default_figsize
-):
-    """
-    Overview plot (June->May) for:
-      plot_type="LS": load shedding from generators_t.p["load shedding"] [MW]
-      plot_type="SP": marginal price from buses_t.marginal_price["electricity bus"] [€/MWh]
-      plot_type="NL": residual load = calculate_net_load_potential(network, year).clip(lower=0) [MW]
-
-    agg:
-      "hourly": plot hourly values
-      "daily": aggregate by day
-        - LS: daily sum
-        - SP: daily mean
-        - NL: daily sum (residual load)
-
-    show_heatmap:
-      True  -> heatmap + colorbar + event overlays
-      False -> event overlays only (same layout and styling)
-    """
-    plot_type = plot_type.upper()
-    years = sorted(int(y) for y in selected_networks.keys())
-    anchor = pd.Timestamp(standard_year, start_month, 1)
-
-    # Y label to 98/99 instead of just 1998
-    year_labels = [f"{y % 100:02d}/{(y + 1) % 100:02d}" for y in years]
-
-    def to_model_day(ts: pd.Timestamp) -> int:
-        same_year = pd.Timestamp(standard_year, ts.month, ts.day)
-        if ts.month < start_month:
-            same_year = same_year + pd.DateOffset(years=1)
-        return int((same_year - anchor).days)
-
-    def to_model_hour(ts: pd.Timestamp) -> int:
-        return int(to_model_day(ts) * 24 + ts.hour)
-
-    # -------------------------
-    # Extract series by year
-    # -------------------------
-    series_by_year = {}
-
-    for y in years:
-        n = selected_networks[y]
-
-        if plot_type == "LS":
-            s = pd.Series(n.generators_t.p["load shedding"]).sort_index()
-            series_by_year[y] = s
-
-        elif plot_type == "SP":
-            s = pd.Series(n.buses_t.marginal_price["electricity bus"]).sort_index()
-            series_by_year[y] = s
-
-        else:  # "NL"
-            s = calculate_net_load_potential(n, weather_year=y)
-            s = pd.Series(s).sort_index().clip(lower=0.0)
-            series_by_year[y] = s
-
-    # -------------------------
-    # Aggregation rules
-    # -------------------------
-    if plot_type == "SP":
-        daily_method = "mean"
-        default_cbar = "Daily mean shadow price [€/MWh]"
-        default_title = "Electricity price overview"
-    elif plot_type == "LS":
-        daily_method = "sum"
-        default_cbar = "Load shedding [MW·h/day]" if agg == "daily" else "Load shedding [MW]"
-        default_title = "Load shedding overview"
-    else:  # "NL"
-        daily_method = "sum"
-        default_cbar = "Residual load [MW·h/day]" if agg == "daily" else "Residual load [MW]"
-        default_title = "Residual load overview"
-
-    if title is None:
-        title = default_title
-
-    # -------------------------
-    # Build time grid
-    # -------------------------
-    if agg == "daily":
-        n_bins = 366
-        x_edges = np.arange(n_bins + 1)
-        xticks, xlabels = [], []
-
-        for k in range(12):
-            m = (start_month + k - 1) % 12 + 1
-            year_offset = 0 if m >= start_month else 1
-            dt = pd.Timestamp(standard_year + year_offset, m, 1)
-            xticks.append((dt - anchor).days)
-            xlabels.append(dt.strftime("%b"))
-    else:
-        n_bins = 366 * 24
-        x_edges = np.arange(n_bins + 1)
-        xticks, xlabels = [], []
-
-        for k in range(12):
-            m = (start_month + k - 1) % 12 + 1
-            year_offset = 0 if m >= start_month else 1
-            dt = pd.Timestamp(standard_year + year_offset, m, 1)
-            xticks.append(int((dt - anchor).days * 24))
-            xlabels.append(dt.strftime("%b"))
-
-    Z = np.full((len(years), n_bins), np.nan)
-
-    if show_heatmap:
-        for i, y in enumerate(years):
-            s = series_by_year[y]
-
-            if agg == "daily":
-                if daily_method == "sum":
-                    d = s.groupby(s.index.normalize()).sum()
-                else:
-                    d = s.groupby(s.index.normalize()).mean()
-
-                m = pd.Series({to_model_day(t): v for t, v in d.items()})
-                m = m[(m.index >= 0) & (m.index <= n_bins - 1)]
-                Z[i, m.index.values] = m.values
-            else:
-                m = pd.Series({to_model_hour(t): v for t, v in s.items()})
-                m = m[(m.index >= 0) & (m.index <= n_bins - 1)]
-                Z[i, m.index.values] = m.values
-
-        if vmax is None:
-            vmax = float(np.nanmax(Z))
-
-        norm = Normalize(vmin=vmin, vmax=vmax)
-        cm = plt.get_cmap(cmap).copy()
-        cm.set_under("white")
-
-    # -------------------------
-    # Plot
-    # -------------------------
-    fig, ax = plt.subplots(figsize=figure_size, constrained_layout=True)
-    fig.subplots_adjust(right=0.82)
-
-    if show_heatmap:
-        mesh = ax.pcolormesh(
-            x_edges,
-            np.arange(len(years) + 1),
-            Z,
-            shading="auto",
-            cmap=cm,
-            norm=norm,
-            alpha=heatmap_alpha,
-        )
-
-        cax = fig.add_axes([0.86, 0.07, 0.02, 0.45])
-        cbar = fig.colorbar(mesh, cax=cax, extend="min")
-        cbar.set_label(default_cbar)
-
-    ax.set_yticks(np.arange(len(years)) + 0.5)
-    ax.set_yticklabels(year_labels)
-    ax.set_ylabel("Weather year")
-
-    for yline in range(1, len(years)):
-        ax.hlines(
-            yline,
-            xmin=x_edges[0],
-            xmax=x_edges[-1],
-            colors=rowline_color,
-            linewidth=rowline_width,
-            zorder=3,
-        )
-
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(xlabels)
-    ax.set_xlabel(f"Demand year {standard_year}/{standard_year+1}")
-    ax.set_title(title)
-
-    offsets = {lab: (i - (len(event_labels) - 1) / 2) * offset_step
-               for i, lab in enumerate(event_labels)}
-
-    for events, lab, col in zip(event_dicts, event_labels, event_colors):
-        first_label = lab
-        dy = offsets[lab]
-
-        for y, ev_list in sorted(events.items()):
-            if not ev_list or isinstance(ev_list, int):
-                continue
-
-            row = years.index(int(y))
-            y_pos = row + 0.5 + dy
-
-            for ev in ev_list:
-                if agg == "daily":
-                    s0 = to_model_day(ev.period.left)
-                    e0 = to_model_day(ev.period.right)
-                else:
-                    s0 = to_model_hour(ev.period.left)
-                    e0 = to_model_hour(ev.period.right)
-
-                ax.plot(
-                    [s0, e0],
-                    [y_pos, y_pos],
-                    color=col,
-                    linewidth=event_linewidth,
-                    alpha=event_alpha,
-                    solid_capstyle="butt",
-                    label=first_label,
-                    zorder=4,
-                )
-                first_label = None
-
-    ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        borderaxespad=0.0,
-        frameon=True,
-    )
-
-    return fig, ax
-
-
 def plot_overview_heatmap(
     selected_networks: dict,
     plot_type: str,
@@ -2848,6 +2085,13 @@ def plot_overview_heatmap(
     draw_title: bool = True,
     end_month: int | None = None,   
 ):
+    """
+    Plot a multi-year heatmap of system metrics with overlaid extreme-event periods.
+
+    The function visualizes daily or hourly values across weather years and
+    highlights detected events as horizontal bars aligned with each year.
+
+    """
     plot_type = plot_type.upper()
     years = sorted(int(y) for y in selected_networks.keys())
     year_labels = [f"{y % 100:02d}/{(y + 1) % 100:02d}" for y in years]
@@ -2897,7 +2141,7 @@ def plot_overview_heatmap(
             s = calculate_net_load_potential(n, weather_year=y)
             s = pd.Series(s).sort_index().clip(lower=0.0)
 
-        # FIX 1: filter per year and store back
+        # Restrict the time series to the selected month window
         mask = _month_window_mask(s.index, start_month, end_month)
         s = s.loc[mask]
         series_by_year[y] = s
@@ -2991,7 +2235,7 @@ def plot_overview_heatmap(
     ax.set_yticks(np.arange(len(years)) + 0.5)
     ax.set_yticklabels(year_labels)
     ax.set_ylabel("Weather year")
-    # FIX: enforce identical top/bottom spacing whether heatmap is on or off
+    # Keep consistent vertical spacing independent of whether the heatmap is drawn
     ax.set_ylim(0, len(years))
     ax.margins(y=0)
 
@@ -3041,7 +2285,7 @@ def plot_overview_heatmap(
                     s0 = to_model_hour(ev.period.left)
                     e0 = to_model_hour(ev.period.right)
 
-                # FIX 2: clip event lines to window
+                # Keep event lines within the plotted time window
                 if e0 < 0 or s0 > n_bins - 1:
                     continue
                 s0 = max(0, s0)
@@ -3608,90 +2852,6 @@ def plot_overlap_matrix_heatmap(
     cbar.set_label("Probability share", labelpad=15)
     cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
     cbar.ax.set_yticklabels(['0', '0.2', '0.4', '0.6', '0.8', '1.0'])
-
-    # annotate only non-diagonal, non-masked values
-    for i in range(M.shape[0]):
-        for j in range(M.shape[1]):
-            if diag_mask[i, j]:
-                continue
-            v = M.iat[i, j]
-            if v >= highlight_from:
-                ax.text(j, i, format(v, annotation_fmt), ha="center", va="center")
-
-    # grid between cells
-    ax.set_xticks(np.arange(M.shape[1] + 1) - 0.5, minor=True)
-    ax.set_yticks(np.arange(M.shape[0] + 1) - 0.5, minor=True)
-    ax.grid(which="minor", linestyle="-", linewidth=0.5)
-    ax.tick_params(which="minor", bottom=False, left=False)
-
-    # KEEP outer frame
-    for spine in ax.spines.values():
-        spine.set_visible(True)
-        spine.set_linewidth(0.8)
-
-    fig.tight_layout()
-
-    if savepath is not None:
-        fig.savefig(savepath, bbox_inches="tight")
-
-    return fig, ax
-
-
-def plot_overlap_matrix_heatmap_old(
-    M: pd.DataFrame,
-    title: str,
-    figure_size: Tuple[float, float] = (10, 8),
-    cmap: str = "Oranges",
-    highlight_from: float = 0.6,
-    annotation_fmt: str = ".2f",
-    rotate_xticks: int = 45,
-    savepath: Optional[str] = None
-) -> Tuple[plt.Figure, plt.Axes]:
-    """
-    Heatmap for asymmetric event overlap matrix.
-    Diagonal (self-overlap) is removed (white, no annotation).
-    """
-
-    A = M.to_numpy().copy()
-
-    diag_mask = np.eye(A.shape[0], dtype=bool)
-    low_mask = A < highlight_from
-
-    A_plot = A.copy()
-    A_plot[low_mask] = np.nan
-    A_plot[diag_mask] = np.nan
-
-    fig, ax = plt.subplots(figsize=figure_size)
-
-    cm = mpl.colormaps.get_cmap(cmap).copy()
-    cm.set_bad("white")
-
-    norm = Normalize(vmin=highlight_from, vmax=1.0, clip=False)
-
-    im = ax.imshow(
-        A_plot,
-        cmap=cm,
-        norm=norm,
-        interpolation="nearest",
-        aspect="auto"
-    )
-
-    ax.set_title(title)
-    ax.set_xticks(np.arange(M.shape[1]))
-    ax.set_yticks(np.arange(M.shape[0]))
-    ax.set_xticklabels(M.columns)
-    ax.set_yticklabels(M.index)
-
-    ax.tick_params(top=True, bottom=False, labeltop=True, labelbottom=False)
-    plt.setp(
-        ax.get_xticklabels(),
-        rotation=rotate_xticks,
-        ha="left",
-        rotation_mode="anchor"
-    )
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Probability share")
 
     # annotate only non-diagonal, non-masked values
     for i in range(M.shape[0]):
